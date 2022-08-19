@@ -15,7 +15,6 @@ class LocalLBRWorker:
     """
 
     def __init__(self, t_prof, chief_handle, eval_agent_cls):
-        assert t_prof.n_seats == 2
 
         self.t_prof = t_prof
         self.lbr_args = t_prof.module_args["lbr"]
@@ -60,11 +59,11 @@ class LocalLBRWorker:
 
     def _run_limit(self, agent_seat_id, n_iterations):
         total_lbr_winnings = np.empty(shape=n_iterations, dtype=np.float32)
-        lbr_seat_id = 1 - agent_seat_id
+        # Pick a random seat that is not an agent.
+        lbr_seat_id = np.random.choice(np.setdiff1d(range(self.t_prof.n_seats), agent_seat_id))
 
         for iteration_id in range(n_iterations):
-            if iteration_id % 50 == 0:
-                print("LBR hand: ", iteration_id)
+            gc.collect()
 
             # """""""""""""""""
             # Reset
@@ -171,12 +170,10 @@ class LocalLBRWorker:
 
     def _run_no_limit(self, agent_seat_id, n_iterations):
         total_lbr_winnings = np.empty(shape=n_iterations, dtype=np.float32)
-        lbr_seat_id = 1 - agent_seat_id
+        lbr_seat_id = np.random.choice(np.setdiff1d(range(self.t_prof.n_seats), agent_seat_id))
         n_lbr_bets = len(self._env.bet_sizes_list_as_frac_of_pot)
 
         for iteration_id in range(n_iterations):
-            if iteration_id % 50 == 0:
-                print("LBR hand: ", iteration_id)
 
             # """""""""""""""""
             # Reset
@@ -304,7 +301,6 @@ class LocalLBRWorker:
                                                             board_now_2d=self._env.board)
 
             total_lbr_winnings[iteration_id] = reward[lbr_seat_id] * self._env.REWARD_SCALAR * self._env.EV_NORMALIZER
-
         return total_lbr_winnings
 
 
@@ -385,15 +381,15 @@ class _LBRRolloutManager:
 
         self._env = env
 
-        self._lbr_hand_1d = self.env_bldr.lut_holder.get_1d_cards(cards_2d=lbr_hand_2d)
+        self._lbr_hand_1d = np.array([int(c) for c in self.env_bldr.lut_holder.get_1d_cards(cards_2d=lbr_hand_2d)], dtype=np.int32)
         self._lbr_hand_range_idx = self.env_bldr.lut_holder.get_range_idx_from_hole_cards(hole_cards_2d=lbr_hand_2d)
 
         self._board_2d = np.copy(self._env.board)  # still has not-dealt cards
         self._board_1d = self.env_bldr.lut_holder.get_1d_cards(self._board_2d)  # still has not-dealt cards
 
-        self._cards_dealt = np.array([c for c in self._board_1d if c != Poker.CARD_NOT_DEALT_TOKEN_1D])
+        self._cards_dealt = np.array([int(c) for c in self._board_1d if c != Poker.CARD_NOT_DEALT_TOKEN_1D], dtype=np.int32)
         self._possible_cards = np.arange(self.env_bldr.rules.N_CARDS_IN_DECK, dtype=np.int32)
-        self._possible_cards = np.delete(self._possible_cards, np.concatenate((self._cards_dealt, self._lbr_hand_1d)))
+        self._possible_cards = np.delete(self._possible_cards, np.concatenate((self._cards_dealt, self._lbr_hand_1d), dtype=np.int32))
 
         self._n_cards_to_deal = env_bldr.lut_holder.DICT_LUT_N_CARDS_OUT[self._env.ALL_ROUNDS_LIST[-1]] \
                                 - env_bldr.lut_holder.DICT_LUT_N_CARDS_OUT[self._env.current_round]

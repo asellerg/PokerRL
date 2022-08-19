@@ -1,6 +1,7 @@
 # Copyright (c) 2019 Eric Steinberger
 
 
+import collections
 import copy
 import time
 
@@ -11,6 +12,17 @@ from PokerRL.game.Poker import Poker
 from PokerRL.game.PokerEnvStateDictEnums import EnvDictIdxs, PlayerDictIdxs
 from PokerRL.game._.rl_env.base._Deck import DeckOfCards
 from PokerRL.game._.rl_env.base._PokerPlayer import PokerPlayer
+
+from poker_ai.games.short_deck.player import ShortDeckPokerPlayer
+from poker_ai.games.short_deck.state import ShortDeckPokerState
+from poker_ai.utils.algos import ACTIONS
+from poker_ai.poker import card
+import joblib
+
+
+_POKER_AI_ACTIONS = dict(zip(range(5), ACTIONS))
+
+_CARD_INFO_LUT = joblib.load('/home/asellerg/data/clusters/card_info_lut.joblib')
 
 
 class PokerEnv:
@@ -170,9 +182,10 @@ class PokerEnv:
         self.current_player = None  # PokerPlayer instance of player currently having to get_action
         self.last_raiser = None  # PokerPlayer instance
         self.n_actions_this_episode = None  # Number of actions performed this episode
+        self.poker_ai_state = None
 
         # only relevant in Limit games
-        self.n_raises_this_round = NotImplementedError
+        self.n_raises_this_round = 0
 
     def _construct_obs_space(self):
         """
@@ -659,8 +672,7 @@ class PokerEnv:
             raise ValueError(self.current_round)
 
     def _next_round(self):
-        if self.IS_FIXED_LIMIT_GAME:
-            self.n_raises_this_round = 0
+        self.n_raises_this_round = 0
 
         # refer to #ID_2 in docstring of this class for this.
         self.capped_raise.reset()
@@ -723,9 +735,7 @@ class PokerEnv:
 
             self.n_actions_this_episode += 1
 
-            # If this is a limit poker game, increment the raise counter
-            if self.IS_FIXED_LIMIT_GAME:
-                self.n_raises_this_round += 1
+            self.n_raises_this_round += 1
         else:
             raise RuntimeError(processed_action[0], " is not legal")
 
@@ -917,7 +927,7 @@ class PokerEnv:
 
             # Limit Poker specific rule
             if self.IS_FIXED_LIMIT_GAME:
-                if self.n_raises_this_round >= self.MAX_N_RAISES_PER_ROUND[self.current_round]:
+                if self.n_raises_this_round >= 2:
                     return self._process_check_call(total_to_call=total_to_call)
 
             if ((self.current_player.stack + self.current_player.current_bet <= total_to_call)
@@ -1084,11 +1094,10 @@ class PokerEnv:
                                             If an instance of a PokerEnv subclass is passed, the deck, holecards, and
                                             board in this instance will be synchronized from the handed env cls.
         """
-        if self.IS_FIXED_LIMIT_GAME:
-            if self.BIG_BLIND > 0:
-                self.n_raises_this_round = 1  # big blind counts, but in ante-only games like LEDUC it doesn't count
-            else:
-                self.n_raises_this_round = 0
+        if self.BIG_BLIND > 0:
+            self.n_raises_this_round = 1  # big blind counts, but in ante-only games like LEDUC it doesn't count
+        else:
+            self.n_raises_this_round = 0
 
         # reset table
         self.side_pots = [0] * self.N_SEATS  # chip count in side pots
@@ -1118,6 +1127,21 @@ class PokerEnv:
         # optionally synchronize random variables from another env
         if deck_state_dict is not None:
             self.load_cards_state_dict(cards_state_dict=deck_state_dict)
+
+        sb_first = collections.deque(self.seats)
+        sb_first.rotate(-1)
+        players = ShortDeckPokerPlayer.from_deep_cfr_seats(sb_first)
+        self.poker_ai_state = ShortDeckPokerState(
+            players=players,
+            load_card_lut=False,
+            is_training=True,
+            deal_private_cards=False)
+        self.poker_ai_state.card_info_lut = _CARD_INFO_LUT
+        for i, seat in enumerate(sb_first):
+            for c in seat.hand:
+                c = card.Card.from_deep_cfr(c)
+                self.poker_ai_state._table.dealer.deal_card(c)
+                self.poker_ai_state.players[i].add_private_card(c)
 
         return self._get_current_step_returns(is_terminal=False, info=[False, None])
 
@@ -1155,6 +1179,8 @@ class PokerEnv:
         """
 
         # cap min/max raises and format action. after that the action is legal 100% and can be executed blindly
+        if self.poker_ai_state is not None and self.current_round == 0:
+            self.poker_ai_state = self.poker_ai_state.apply_action(_POKER_AI_ACTIONS[action])
         processed_action = self._get_env_adjusted_action_formulation(action)
         return self._step(processed_action=processed_action)
 
@@ -1192,8 +1218,7 @@ class PokerEnv:
                     }
                     for p in self.seats]
         }
-        if self.IS_FIXED_LIMIT_GAME:
-            env_state_dict[EnvDictIdxs.n_raises_this_round] = self.n_raises_this_round
+        env_state_dict[EnvDictIdxs.n_raises_this_round] = self.n_raises_this_round
         return env_state_dict
 
     def load_state_dict(self, env_state_dict, blank_private_info=False):
@@ -1231,8 +1256,7 @@ class PokerEnv:
         self.deck.load_state_dict(env_state_dict[EnvDictIdxs.deck])
         self.n_actions_this_episode = env_state_dict[EnvDictIdxs.n_actions_this_episode]
 
-        if self.IS_FIXED_LIMIT_GAME:
-            self.n_raises_this_round = env_state_dict[EnvDictIdxs.n_raises_this_round]
+        self.n_raises_this_round = env_state_dict[EnvDictIdxs.n_raises_this_round]
 
         for p in self.seats:
             p.seat_id = env_state_dict[EnvDictIdxs.seats][p.seat_id][PlayerDictIdxs.seat_id]
@@ -1470,8 +1494,7 @@ class PokerEnv:
                       " " * 18,
                       '|   Side_pot' + str(p.seat_id) + ": " + str(self.side_pots[p.seat_id]).rjust(6))
 
-            if self.IS_FIXED_LIMIT_GAME:
-                print("Num raises this round: ", self.n_raises_this_round)
+            print("Num raises this round: ", self.n_raises_this_round)
             print("\n")
 
         else:

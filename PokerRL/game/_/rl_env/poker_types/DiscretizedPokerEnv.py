@@ -111,6 +111,9 @@ class DiscretizedPokerEnv(_PokerEnv):
             if self._get_fixed_action(action=_a)[0] == a_int:
                 legal_actions.append(a_int)
 
+        if self.current_round != Poker.PREFLOP and self.n_raises_this_round >= 3:
+            return legal_actions
+
         # since raises are ascending in the list, we can simply loop and break
         _last_too_small = None
         for a in range(2, self.N_ACTIONS):  # only loops through raises

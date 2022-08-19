@@ -33,6 +33,6 @@ class WorkerBase:
         pass
 
     def _get_checkpoint_file_path(self, name, step, cls, worker_id):
-        path = ospj(self._t_prof.path_checkpoint, str(name), str(step))
+        path = ospj(self._t_prof.path_checkpoint, str(name).strip('_'), str(step))
         file_util.create_dir_if_not_exist(path)
         return ospj(path, cls.__name__ + "_" + str(worker_id) + ".pkl")

@@ -19,8 +19,6 @@ class LocalLBRMaster(EvaluatorMasterBase):
     """
 
     def __init__(self, t_prof, chief_handle):
-        assert t_prof.n_seats == 2
-
         EvaluatorMasterBase.__init__(self, t_prof=t_prof, eval_env_bldr=_util.get_env_builder_lbr(t_prof=t_prof),
                                      chief_handle=chief_handle, eval_type="LBR", log_conf_interval=True)
 
@@ -67,6 +65,7 @@ class LocalLBRMaster(EvaluatorMasterBase):
                 scores = np.concatenate(scores, axis=0)
                 if len(scores) > 0:
                     mean, d = self._get_95confidence(scores)
+                    print(f"mean: {mean}, d: {d}")
 
                     self._log_results(iter_nr=iter_nr,
                                       agent_mode=mode,
